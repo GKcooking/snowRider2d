@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Snow Rider 2D: Gift Hunt</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Arial Black', sans-serif; background: #f0faff; color: #0077be; }
+        #ui { position: absolute; top: 20px; width: 100%; text-align: center; pointer-events: none; z-index: 5; }
+        #stats { position: absolute; top: 10px; left: 20px; text-align: left; font-size: 18px; text-shadow: 1px 1px 0px #fff; }
+        .overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+                   background: rgba(255,255,255,0.95); padding: 30px; border-radius: 25px; text-align: center; 
+                   border: 5px solid #0077be; width: 400px; z-index: 10; }
+        .shop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; }
+        .item { padding: 10px; border: 2px solid #ccc; border-radius: 10px; cursor: pointer; background: #fff; color: #333; }
+        .item.equipped { border-color: #0077be; background: #e0f3ff; }
+        button { padding: 15px 30px; font-size: 20px; cursor: pointer; border-radius: 10px; border: none; 
+                 background: #0077be; color: white; font-weight: bold; width: 100%; }
+        
+        /* Mobile Touch Buttons Styling */
+        .mobile-btn {
+            position: absolute;
+            bottom: 40px;
+            width: 80px;
+            height: 80px;
+            background: rgba(0, 119, 190, 0.2);
+            border: 3px solid rgba(0, 119, 190, 0.6);
+            border-radius: 50%;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            font-size: 35px;
+            color: #0077be;
+            z-index: 20;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        #leftBtn { left: 40px; }
+        #rightBtn { right: 40px; }
+    </style>
+</head>
+<body>
+
+<div id="stats">
+    <div>Gifts: <span id="giftCount" style="color:#d32f2f;">0</span></div>
+    <div>Best: <span id="highScore">0</span>m</div>
+    <div id="hpDisplay" style="display: none; font-size: 16px; margin-top: 5px;">Sled Armor: <span id="hpCount" style="color:#2d5a27;">1</span></div>
+</div>
+
+<div id="ui"><div id="score" style="font-size: 40px;">0m</div></div>
+
+<div id="shopScreen" class="overlay">
+    <h1 style="margin-top:0;">SLED SHOP</h1>
+    <div class="shop-grid" id="shopGrid"></div>
+    <button onclick="startGame()">START RIDE</button>
+</div>
+
+<div id="gameOverScreen" class="overlay" style="display: none;">
+    <h1 style="color:#d32f2f;">CRASHED!</h1>
+    <p>Distance: <span id="finalDist">0</span>m</p>
+    <p>Gifts Found: <span id="foundGifts">0</span></p>
+    <button onclick="showShop()">BACK TO SHOP</button>
+</div>
+
+<!-- Mobile Touch Inputs -->
+<div id="leftBtn" class="mobile-btn">◀</div>
+<div id="rightBtn" class="mobile-btn">▶</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// --- DATA & SAVING ---
+let gifts = parseInt(localStorage.getItem('snowGifts')) || 0;
+let highScore = parseInt(localStorage.getItem('snowHigh')) || 0;
+let ownedSleds = JSON.parse(localStorage.getItem('ownedSleds')) || [0];
+let equippedIndex = parseInt(localStorage.getItem('equippedSled')) || 0;
+
+// Added health property to each sled: defines how many hits it can take
+const sleds = [
+    { name: "Wooden", color: "#8d6e63", speed: 5, turn: 7, price: 0, health: 1 },
+    { name: "Blue Streak", color: "#0077be", speed: 7, turn: 9, price: 50, health: 2 },
+    { name: "Fire Sled", color: "#d32f2f", speed: 9, turn: 11, price: 150, health: 3 },
+    { name: "Carbon X", color: "#333333", speed: 12, turn: 13, price: 300, health: 4 }
+];
+
+function save() {
+    localStorage.setItem('snowGifts', gifts);
+    localStorage.setItem('snowHigh', highScore);
+    localStorage.setItem('ownedSleds', JSON.stringify(ownedSleds));
+    localStorage.setItem('equippedSled', equippedIndex);
+    document.getElementById('giftCount').innerText = gifts;
+    document.getElementById('highScore').innerText = highScore;
+}
+
+// --- GAME LOGIC ---
+let gameActive = false, score = 0, currentSpeed = 0, playerX = canvas.width/2, obstacles = [], keys = {a:false, d:false};
+let currentHealth = 1; // Track active sled health during a run
+
+window.addEventListener('keydown', (e) => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; });
+window.addEventListener('keyup', (e) => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; });
+
+// Unmodified Setup for Touch Devices
+if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+    const leftBtn = document.getElementById('leftBtn');
+    const rightBtn = document.getElementById('rightBtn');
+    
+    leftBtn.style.display = 'flex';
+    rightBtn.style.display = 'flex';
+    
+    leftBtn.addEventListener('touchstart', (e) => { e.preventDefault(); keys.a = true; });
+    leftBtn.addEventListener('touchend', (e) => { e.preventDefault(); keys.a = false; });
+    
+    rightBtn.addEventListener('touchstart', (e) => { e.preventDefault(); keys.d = true; });
+    rightBtn.addEventListener('touchend', (e) => { e.preventDefault(); keys.d = false; });
+}
+
+function showShop() {
+    document.getElementById('hpDisplay').style.display = 'none';
+    document.getElementById('gameOverScreen').style.display = 'none';
+    document.getElementById('shopScreen').style.display = 'block';
+    const grid = document.getElementById('shopGrid');
+    grid.innerHTML = '';
+    sleds.forEach((s, i) => {
+        const div = document.createElement('div');
+        div.className = `item ${equippedIndex === i ? 'equipped' : ''}`;
+        div.innerHTML = `<div style="background:${s.color}; height:10px; width:30px; margin:0 auto; border-radius:5px;"></div>
+                         <b>${s.name}</b><br>
+                         <small>Hits: ${s.health}</small><br>
+                         <small>Price: ${s.price}</small>`;
+        div.onclick = () => {
+            if (ownedSleds.includes(i)) { equippedIndex = i; }
+            else if (gifts >= s.price) { gifts -= s.price; ownedSleds.push(i); equippedIndex = i; }
+            save(); showShop();
+        };
+        grid.appendChild(div);
+    });
+}
+
+function startGame() {
+    gameActive = true; score = 0; obstacles = []; playerX = canvas.width/2;
+    currentSpeed = sleds[equippedIndex].speed;
+    currentHealth = sleds[equippedIndex].health; // Set health to current sled's max hits
+    
+    document.getElementById('hpCount').innerText = currentHealth;
+    document.getElementById('hpDisplay').style.display = 'block';
+    document.getElementById('shopScreen').style.display = 'none';
+}
+
+function gameLoop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (gameActive) {
+        if (keys.a) playerX -= sleds[equippedIndex].turn;
+        if (keys.d) playerX += sleds[equippedIndex].turn;
+        playerX = Math.max(30, Math.min(canvas.width - 30, playerX));
+
+        if (Math.random() < 0.04) {
+            let type = Math.random() < 0.2 ? 'gift' : (Math.random() < 0.5 ? 'tree' : 'rock');
+            obstacles.push({ x: Math.random() * canvas.width, y: canvas.height + 50, type });
+        }
+
+        obstacles.forEach((obs, i) => {
+            obs.y -= currentSpeed;
+            let dist = Math.hypot(playerX - obs.x, 150 - obs.y);
+            if (dist < 35) {
+                if (obs.type === 'gift') { gifts++; obstacles.splice(i, 1); save(); }
+                else {
+                    obstacles.splice(i, 1); // Clear the obstacle hit
+                    currentHealth--; // Lose 1 armor durability
+                    document.getElementById('hpCount').innerText = currentHealth;
+                    
+                    if (currentHealth <= 0) {
+                        gameActive = false;
+                        keys.a = false;
+                        keys.d = false;
+                        if (Math.floor(score) > highScore) highScore = Math.floor(score);
+                        save();
+                        document.getElementById('gameOverScreen').style.display = 'block';
+                        document.getElementById('finalDist').innerText = Math.floor(score);
+                        document.getElementById('foundGifts').innerText = gifts;
+                    }
+                }
+            }
+            if (obs.y < -50) obstacles.splice(i, 1);
+        });
+
+        score += 0.1;
+        currentSpeed += 0.002;
+    }
+
+    // DRAWING
+    obstacles.forEach(obs => {
+        if (obs.type === 'gift') {
+            ctx.fillStyle = "#d32f2f"; ctx.fillRect(obs.x-10, obs.y, 20, 20);
+            ctx.fillStyle = "gold"; ctx.fillRect(obs.x-2, obs.y, 4, 20); ctx.fillRect(obs.x-10, obs.y+8, 20, 4);
+        } else if (obs.type === 'tree') {
+            ctx.fillStyle = "#2d5a27"; ctx.beginPath(); ctx.moveTo(obs.x, obs.y); ctx.lineTo(obs.x-25, obs.y+50); ctx.lineTo(obs.x+25, obs.y+50); ctx.fill();
+        } else {
+            ctx.fillStyle = "#90a4ae"; ctx.beginPath(); ctx.arc(obs.x, obs.y+20, 15, 0, 7); ctx.fill();
+        }
+    });
+
+    ctx.fillStyle = sleds[equippedIndex].color;
+    ctx.fillRect(playerX - 15, 150, 30, 10); // Sled
+    ctx.fillStyle = "#333"; ctx.fillRect(playerX-18, 160, 36, 3); // Runners
+
+    document.getElementById('score').innerText = Math.floor(score) + "m";
+    requestAnimationFrame(gameLoop);
+}
+
+save(); showShop(); gameLoop();
+</script>
+</body>
+</html>
